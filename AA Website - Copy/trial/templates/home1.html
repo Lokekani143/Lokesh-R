@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kannivedi Fighters</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            display: flex;
+            gap: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+        #tree-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: auto;
+        }
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+        .node {
+            cursor: pointer;
+            fill: #69b3a2;
+            stroke: #555;
+            stroke-width: 1.5px;
+        }
+        .link {
+            fill: none;
+            stroke: #ccc;
+            stroke-width: 1.5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <input type="text" id="clientName" placeholder="Enter Client Name">
+        <select id="parentSelect">
+            <option value="">-- Select Parent --</option>
+        </select>
+        <button onclick="addNode()">Add Node</button>
+    </div>
+
+    <h2 style="text-align: center;"><u>KanniVedi Fighters Tree Chart</u></h2>
+    <div id="tree-container">
+        <svg></svg>
+    </div>
+
+    <script>
+        let treeData = {};
+
+        async function fetchTree() {
+            try {
+                let response = await fetch("/get_tree");
+                let result = await response.json();
+                treeData = convertToD3Tree(result);
+                updateTree();
+                updateParentDropdown(result);
+            } catch (error) {
+                console.error("Error fetching tree:", error);
+            }
+        }
+
+        function convertToD3Tree(users) {
+            if (!users || Object.keys(users).length === 0) return { name: "Root", children: [] };
+
+            let nodes = {};
+            let root = null;
+
+            for (let id in users) {
+                let user = users[id];
+                nodes[id] = { id: user.id, name: user.name, children: [] };
+            }
+
+            for (let id in users) {
+                let user = users[id];
+                if (user.parent) {
+                    nodes[user.parent].children.push(nodes[id]);
+                } else {
+                    root = nodes[id];
+                }
+            }
+
+            return root;
+        }
+
+        function updateTree() {
+            d3.select("svg").selectAll("*").remove();
+            const root = d3.hierarchy(treeData);
+            const treeLayout = d3.tree().size([window.innerWidth - 100, window.innerHeight - 100]);
+            treeLayout(root);
+
+            const svg = d3.select("svg")
+                .attr("viewBox", `0 0 ${window.innerWidth} ${window.innerHeight}`)
+                .attr("preserveAspectRatio", "xMidYMid meet");
+
+            const g = svg.append("g");
+
+            g.selectAll(".link")
+                .data(root.links())
+                .enter()
+                .append("line")
+                .attr("class", "link")
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            const nodes = g.selectAll(".node")
+                .data(root.descendants())
+                .enter()
+                .append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .on("click", (event, d) => editNode(d.data));
+
+            nodes.append("circle")
+                .attr("r", 20)
+                .style("fill", "#69b3a2");
+
+            nodes.append("text")
+                .attr("dy", 5)
+                .attr("text-anchor", "middle")
+                .text(d => d.data.name);
+        }
+
+        function updateParentDropdown(users) {
+            let dropdown = document.getElementById("parentSelect");
+            dropdown.innerHTML = '<option value="">-- Select Parent --</option>';
+
+            for (let id in users) {
+                let user = users[id];
+                if (!user.left_child || !user.right_child) {
+                    let option = document.createElement("option");
+                    option.value = user.id;
+                    option.textContent = user.name;
+                    dropdown.appendChild(option);
+                }
+            }
+        }
+
+        async function addNode() {
+            let clientName = document.getElementById("clientName").value.trim();
+            let parentId = document.getElementById("parentSelect").value;
+
+            if (clientName === "") {
+                alert("Please enter a client name.");
+                return;
+            }
+
+            try {
+                let response = await fetch("/add_user", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: clientName, parent_id: parentId || null })
+                });
+
+                let result = await response.json();
+                alert(result.message);
+                fetchTree();
+            } catch (error) {
+                console.error("Error adding node:", error);
+            }
+        }
+
+        async function editNode(node) {
+            let newName = prompt("Enter new name:", node.name);
+            if (!newName) return;
+
+            await fetch("/edit_user", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: node.id, name: newName })
+            });
+
+            fetchTree();
+        }
+
+        fetchTree();
+    </script>
+</body>
+</html>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kannivedi Fighters</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            display: flex;
+            gap: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+        #tree-container {
+            width: 100vw;
+            height: 100vh;
+            overflow: auto;
+            border: 1px solid #ddd;
+            white-space: nowrap;
+        }
+        svg {
+            width: 2000px;
+            height: 2000px;
+        }
+        .node {
+            cursor: pointer;
+        }
+        .link {
+            fill: none;
+            stroke: #ccc;
+            stroke-width: 2px;
+        }
+        .popup {
+            position: absolute;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.2);
+            display: none;
+            z-index: 1000;
+        }
+        .popup button {
+            display: block;
+            margin: 5px 0;
+            width: 100%;
+            padding: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <input type="text" id="clientName" placeholder="Enter Client Name">
+        <select id="parentSelect">
+            <option value="">-- Select Parent --</option>
+        </select>
+        <button onclick="addNode()">Add Node</button>
+    </div>
+
+    <h2 style="text-align: center;"><u>KanniVedi Fighters Tree Chart</u></h2>
+    <div id="tree-container">
+        <svg></svg>
+    </div>
+
+    <div id="popup" class="popup">
+    <button onclick="editNode()">Edit Name</button>
+    <button onclick="toggleStatus(true)">Activate</button>
+    <button onclick="toggleStatus(false)">Deactivate</button>
+</div>
+
+
+    <script>
+        let treeData = {};
+        let selectedNode = null;
+
+        async function fetchTree() {
+            try {
+                let response = await fetch("/get_tree");
+                let result = await response.json();
+                treeData = convertToD3Tree(result);
+                updateTree();
+                updateParentDropdown(result);
+            } catch (error) {
+                console.error("Error fetching tree:", error);
+            }
+        }
+
+        function convertToD3Tree(users) {
+            if (!users || Object.keys(users).length === 0) return { name: "Root", active: true, children: [] };
+
+            let nodes = {};
+            let root = null;
+
+            for (let id in users) {
+                let user = users[id];
+                nodes[id] = { id: user.id, name: user.name, active: user.active, children: [] };
+            }
+
+            for (let id in users) {
+                let user = users[id];
+                if (user.parent) {
+                    nodes[user.parent].children.push(nodes[id]);
+                } else {
+                    root = nodes[id];
+                }
+            }
+
+            return root;
+        }
+
+        function updateTree() {
+            d3.select("svg").selectAll("*").remove();
+            const root = d3.hierarchy(treeData);
+
+            const treeLayout = d3.tree()
+                .nodeSize([200, 150])
+                .separation((a, b) => a.parent === b.parent ? 2 : 2.5);
+
+            treeLayout(root);
+
+            const maxDepth = d3.max(root.descendants(), d => d.depth) || 1;
+            const minX = d3.min(root.descendants(), d => d.x);
+            const maxX = d3.max(root.descendants(), d => d.x);
+            const svgWidth = Math.max(2500, maxX - minX + 400);
+            const svgHeight = Math.max(2500, maxDepth * 200 + 300);
+
+            const rootX = root.x;
+
+            const g = d3.select("svg")
+                .attr("viewBox", `0 0 ${svgWidth} ${svgHeight}`)
+                .append("g")
+                .attr("transform", `translate(${svgWidth / 2 - rootX}, 150) scale(1.2)`);
+
+            g.selectAll(".link")
+                .data(root.links())
+                .enter()
+                .append("line")
+                .attr("class", "link")
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            const nodes = g.selectAll(".node")
+                .data(root.descendants())
+                .enter()
+                .append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${d.y})`)
+                .on("click", (event, d) => showPopup(event, d.data));
+
+            nodes.append("circle")
+    .attr("r", 50)
+    .style("fill", d => d.data.active ? "lightgreen" : "lightcoral")  // Set color based on status
+    .style("stroke", "#333")
+    .style("stroke-width", "2px");
+
+
+            nodes.append("text")
+                .attr("dy", 5)
+                .attr("text-anchor", "middle")
+                .style("font-family", "Arial, sans-serif")
+                .style("font-size", "40px")
+                .text(d => d.data.name);
+        }
+
+        function updateParentDropdown(users) {
+            let dropdown = document.getElementById("parentSelect");
+            dropdown.innerHTML = '<option value="">-- Select Parent --</option>';
+
+            for (let id in users) {
+                let user = users[id];
+                if (!user.left_child || !user.right_child) {
+                    let option = document.createElement("option");
+                    option.value = user.id;
+                    option.textContent = user.name;
+                    dropdown.appendChild(option);
+                }
+            }
+        }
+
+        async function addNode() {
+            let clientName = document.getElementById("clientName").value.trim();
+            let parentId = document.getElementById("parentSelect").value;
+
+            if (clientName === "") {
+                alert("Please enter a client name.");
+                return;
+            }
+
+            try {
+                let response = await fetch("/add_user", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: clientName, parent_id: parentId || null })
+                });
+
+                let result = await response.json();
+                alert(result.message);
+                fetchTree();
+            } catch (error) {
+                console.error("Error adding node:", error);
+            }
+        }
+
+        function showPopup(event, node) {
+    selectedNode = node;  // Store the clicked node for later use
+    let popup = document.getElementById("popup");
+
+    let x = event.pageX;  // X-coordinate of mouse click
+    let y = event.pageY;  // Y-coordinate of mouse click
+
+    // Prevent popup from overflowing the screen
+    if (x + popup.offsetWidth > window.innerWidth) {
+        x -= popup.offsetWidth;  // Shift left if it goes off-screen
+    }
+    if (y + popup.offsetHeight > window.innerHeight) {
+        y -= popup.offsetHeight;  // Shift up if it goes off-screen
+    }
+
+    popup.style.left = x + "px";  // Set popup X position
+    popup.style.top = y + "px";   // Set popup Y position
+    popup.style.display = "block";  // Show the popup
+}
+
+
+        async function editNode() {
+            let newName = prompt("Enter new name:", selectedNode.name);
+            if (!newName) return;
+
+            await fetch("/edit_user", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: selectedNode.id, name: newName })
+            });
+
+            fetchTree();
+            document.getElementById("popup").style.display = "none";
+        }
+
+        async function toggleStatus(status) {
+    await fetch("/toggle_status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedNode.id, active: status })
+    });
+
+    // Update the node's status in the frontend
+    selectedNode.active = status;  
+
+    updateTree();  // Redraw the tree with updated colors
+    document.getElementById("popup").style.display = "none";  // Hide the popup
+}
+
+
+
+        fetchTree();
+    </script>
+</body>
+</html>
